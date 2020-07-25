@@ -65,6 +65,7 @@ const subcommands = {
     'sgd-normalize-data': require('./autoqa/sgd/normalize-data'),
 
     'wikidata-process-schema': require('./autoqa/wikidata/process-schema'),
+    'wikidata-download-data': require('./autoqa/wikidata/download-data'),
 
     'auto-annotate': require('./autoqa/auto-annotate'),
     'make-string-datasets': require('./autoqa/make-string-datasets'),

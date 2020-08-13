@@ -34,7 +34,7 @@ class AnnotationExtractor {
         this.options = options;
         this._langPack = new EnglishLanguagePack();
 
-        this._input =[];
+        this._input = [];
         this._output = [];
         this.newCanonicals = {};
     }
@@ -115,6 +115,11 @@ class AnnotationExtractor {
             return;
         }
 
+        // reduce the size of what we paraphrase
+        let input = this._input;
+        if (process.env.CI || process.env.TRAVIS)
+            input = this._input.slice(0, 10);
+
         // if debug file exists, use them directly
         if (fs.existsSync(`./paraphraser-out.json`))
             this._output = JSON.parse(fs.readFileSync(`./paraphraser-out.json`, 'utf-8'));
@@ -135,7 +140,7 @@ class AnnotationExtractor {
 
         const output = util.promisify(fs.writeFile);
         if (this.options.debug)
-            await output(`./paraphraser-in.tsv`, this._input.join('\n'));
+            await output(`./paraphraser-in.tsv`, input.join('\n'));
 
         const stdout = await new Promise((resolve, reject) => {
             child.stdin.write(this._input.join('\n'));
@@ -154,6 +159,9 @@ class AnnotationExtractor {
             await output(`./paraphraser-out.json`, JSON.stringify(JSON.parse(stdout), null, 2));
 
         this._output = JSON.parse(stdout);
+
+        if (process.env.CI || process.env.TRAVIS)
+            this._output = this._output.concat(this._input.slice(10));
     }
 
     generateInput(candidates) {

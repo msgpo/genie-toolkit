@@ -34,6 +34,7 @@ const {
     typeToStringSafe,
     makeFilter,
     makeAndFilter,
+    makeDateRangeFilter,
     isHumanEntity,
     interrogativePronoun,
     tokenizeExample
@@ -397,23 +398,30 @@ class ThingpediaLoader {
 
         let vtype = ptype;
         let op = '==';
+
         // true if slot can use a form with "both", that is, "serves both chinese and italian"
-        // (this is false if the slot uses >= or <=, because "arrives by 7pm and 8pm" doesn't make sense
-        let canUseBothForm = true;
+        // this should be only allowed for operator 'contains', and it's disabled for turking mode
+        // FIXME: allow `=~` for long text (note: we turn == into =~ in MakeFilter)
+        let canUseBothForm = false;
 
         if (arg.annotations.slot_operator) {
             op = arg.annotations.slot_operator.toJS();
             assert(['==', '>=', '<=', 'contains'].includes(op));
-            if (op === '>=' || op === '<=')
-                canUseBothForm = false;
         } else {
             if (ptype.isArray) {
                 vtype = ptype.elem;
+                op = 'contains';
+            } else if (ptype.isRecurrentTimeSpecification) {
+                vtype = Type.Date;
                 op = 'contains';
             } else if (pname === 'id') {
                 vtype = Type.String;
             }
         }
+
+        if (!this._options.flags.turking && op === 'contains')
+            canUseBothForm = true;
+
         const vtypestr = this._recordType(vtype);
         if (vtypestr === null)
             return;
@@ -430,9 +438,9 @@ class ThingpediaLoader {
                 cat = cat.substring(0, cat.length - '_enum'.length);
                 isEnum = true;
             } else if (cat.endsWith('_argmin') || cat.endsWith('_argmax')) {
+                argMinMax = cat.endsWith('_argmin') ? 'asc' : 'desc';
                 // _argmin is the same length as _argmax
                 cat = cat.substring(0, cat.length - '_argmin'.length);
-                argMinMax = cat.endsWith('_argmin') ? 'asc' : 'desc';
             }
 
             if (cat in ANNOTATION_RENAME)
@@ -527,32 +535,38 @@ class ThingpediaLoader {
                         before = (before || '').trim();
                         after = (after || '').trim();
 
-                        let expansion, corefexpansion, pairexpansion;
+                        let expansion, corefexpansion, pairexpansion, daterangeexpansion;
                         if (before && after) {
                             // "rated # stars"
                             expansion = [before, constant, after];
                             corefexpansion = [before, corefconst, after];
                             pairexpansion = [before, new this._runtime.NonTerminal('both_prefix'), new this._runtime.NonTerminal('constant_pairs'), after];
+                            daterangeexpansion = [before, new this._runtime.NonTerminal('constant_date_range'), after];
                         } else if (before) {
                             // "named #"
                             expansion = [before, constant, ''];
                             corefexpansion = [before, corefconst, ''];
                             pairexpansion = [before, new this._runtime.NonTerminal('both_prefix'), new this._runtime.NonTerminal('constant_pairs'), ''];
+                            daterangeexpansion = [before, new this._runtime.NonTerminal('constant_date_range'), ''];
                         } else if (after) {
                             // "# -ly priced"
                             expansion = ['', constant, after];
                             corefexpansion = ['', corefconst, after];
                             pairexpansion = ['', new this._runtime.NonTerminal('both_prefix'), new this._runtime.NonTerminal('constant_pairs'), after];
+                            daterangeexpansion = ['', new this._runtime.NonTerminal('constant_date_range'), after];
                         } else {
                             // "#" (as in "# restaurant")
                             expansion = ['', constant, ''];
                             corefexpansion = ['', corefconst, ''];
                             pairexpansion = ['', new this._runtime.NonTerminal('both_prefix'), new this._runtime.NonTerminal('constant_pairs'), ''];
+                            daterangeexpansion = ['', new this._runtime.NonTerminal('constant_date_range'), ''];
                         }
                         this._grammar.addRule(cat + '_filter', expansion, this._runtime.simpleCombine((_1, value, _2) => makeFilter(this, pvar, op, value, false)), attributes);
                         this._grammar.addRule('coref_' + cat + '_filter', corefexpansion, this._runtime.simpleCombine((_1, value, _2) => makeFilter(this, pvar, op, value, false)), attributes);
                         if (canUseBothForm)
                             this._grammar.addRule(cat + '_filter', pairexpansion, this._runtime.simpleCombine((_1, _2, values, _3) => makeAndFilter(this, pvar, op, values, false)), attributes);
+                        if (ptype.isDate)
+                            this._grammar.addRule(cat + '_filter', daterangeexpansion, this._runtime.simpleCombine((_1, values, _2) => makeDateRangeFilter(this, pvar, values)), attributes);
                     }
                 }
             }
@@ -924,7 +938,7 @@ class ThingpediaLoader {
             let typestr = typeToStringSafe(ttType);
             const { has_ner_support } = this._entities[entityType];
 
-            if (has_ner_support || this._idTypes.has(typestr)) {
+            if (has_ner_support) {
                 if (this._idTypes.has(typestr)) {
                     if (this._options.debug >= this._runtime.LogLevel.DUMP_TEMPLATES)
                         console.log('Loaded entity ' + entityType + ' as id entity');

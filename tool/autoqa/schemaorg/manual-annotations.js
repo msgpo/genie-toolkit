@@ -85,10 +85,13 @@ const BLACKLISTED_PROPERTIES = new Set([
     'thumbnailUrl',
     'trailer',
 
+    // hotel properties: we ended up not using brand
+    'brand'
+
 ]);
 
 const STRUCTURED_HIERARCHIES = [
-    'StructuredValue', 'Rating', 'Offer',
+    'StructuredValue', 'Rating', // Offer (Offer introduce a loop in the latest version of schema.org)
 
     // FIXME Review is too messy to represent as a structured value, either you lose info or you get cycles
     // 'Review'
@@ -105,12 +108,14 @@ const PROPERTY_FORCE_ARRAY = new Set([
 ]);
 
 const PROPERTY_FORCE_NOT_ARRAY = new Set([
-    'offers'
+    'offers',
+    'starRating'
 ]);
 
 const PROPERTY_TYPE_OVERRIDE = {
     'telephone': Type.Entity('tt:phone_number'),
     'email': Type.Entity('tt:email_address'),
+    'faxNumber': Type.Entity('tt:phone_number'),
     'image': Type.Entity('tt:picture'),
     'logo': Type.Entity('tt:picture'),
     'checkinTime': Type.Time,
@@ -135,8 +140,14 @@ const PROPERTY_TYPE_OVERRIDE = {
     'genre': Type.Array(Type.String),
     'creator': Type.Array(Type.Entity('org.schema.Movie:Person')),
     'contentRating': Type.String,
+    'byArtist': Type.Entity('org.schema.Music:Person'),
 
-    'byArtist': Type.Entity('org.schema.Music:Person')
+    'openingHours': Type.RecurrentTimeSpecification,
+    'priceRange': Type.Enum(['cheap', 'moderate', 'expensive', 'luxury']),
+    'workLocation': Type.Location,
+
+    'inLanguage': Type.Entity('tt:iso_lang_code'),
+    'knowsLanguage': Type.Array(Type.Entity('tt:iso_lang_code'))
 };
 
 const PROPERTY_CANONICAL_OVERRIDE = {
@@ -181,11 +192,14 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
     // restaurants
     'datePublished': {
         passive_verb: ["published | on #", "written | on #"],
-        base: ["date published"]
+        base: ["date published"],
+        adjective_argmax: ['most recent', 'latest', 'last'],
+        adjective_argmin: ['earliest', 'first']
     },
     'ratingValue': {
         passive_verb: ["rated # star"],
-        base: ["rating"]
+        base: ["rating"],
+        adjective_argmax: ['top-rated', 'best']
     },
     'reviewRating': {
         base: ["rating"]
@@ -199,6 +213,19 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
         property: ["# cuisine", "# food"],
         base: ["cuisine", "food type"]
     },
+    'priceRange': {
+        base: ['price range'],
+        adjective: ["#"]
+    },
+    'openingHours': {
+        verb: ["opens | at", "opens | on"]
+    },
+    'acceptsReservation': {
+        verb_true: ["accepts reservation"]
+    },
+    'smokingAllowed': {
+        property_true: ['smoking allowed']
+    },
 
     // hotels
     'amenityFeature': {
@@ -210,6 +237,9 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
     },
     'checkoutTime': {
         base: ['checkout time', 'check out time', 'check-out time']
+    },
+    'petsAllowed': {
+        property_true: ['pets allowed']
     },
 
     // linkedin
@@ -260,6 +290,14 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
         passive_verb: [
             'employed | at #', 'employed | by #',
         ]
+    },
+    jobTitle: {
+        base: ['job title', 'position'],
+        reverse_property: ['#']
+    },
+    knowsLanguage: {
+        base: ['languages mastered'],
+        verb: ['knows', 'masters', 'understands']
     },
 
     // recipes
@@ -360,7 +398,12 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
     },
     numberOfPages: {
         base: ['number of pages'],
-        property: ['# pages']
+        property: ['# pages'],
+        adjective_argmax: ['longest'],
+        adjective_argmin: ['shortest']
+    },
+    abridged: {
+        property_true: ['abridged']
     },
 
     // movies
@@ -380,7 +423,9 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
     },
     duration: {
         base: ['duration', 'length'],
-        adjective: ['# long']
+        adjective: ['# long'],
+        adjective_argmax: ['longest'],
+        adjective_argmin: ['shortest']
     },
     actor: {
         base: ['actor', 'actress'],
@@ -407,12 +452,31 @@ const MANUAL_PROPERTY_CANONICAL_OVERRIDE = {
         preposition: ['by', 'by artist'],
         passive_verb: ['created | by', 'sang | by', 'performed | by'],
         verb: ['# sings', '# sang']
+    },
+    numTracks: {
+        base: ['number of tracks', 'number of songs']
+    }
+};
+
+const MANUAL_PROPERTY_CANONICAL_OVERRIDE_BY_DOMAIN = {
+    'restaurants': {
+        'starRating.ratingValue': {
+            base: ["star rating", "michelin rating", "michelin star"],
+            adjective: ["michelin # star", "michelin # star"],
+            passive_verb: ["rated # star by michelin guide"]
+        }
+    },
+    'hotels': {
+        'starRating.ratingValue': {
+            base: ["star rating"],
+            adjective: ["# star"]
+        }
     }
 };
 
 const MANUAL_TABLE_CANONICAL_OVERRIDE = {
     'Restaurant': ['restaurant', 'diner', 'place', 'joint', 'eatery', 'canteen', 'cafeteria', 'cafe'],
-    'Hotel': ['hotel', 'resort', 'lodging', 'model', 'place'],
+    'Hotel': ['hotel', 'resort', 'lodging', 'motel', 'place'],
     'MusicRecording': ['song', 'music recording', 'music'],
     'MusicAlbum': ['album']
 };
@@ -420,8 +484,11 @@ const MANUAL_TABLE_CANONICAL_OVERRIDE = {
 const PROPERTIES_NO_FILTER = [
     'name', // no filter on name, if the id has ner support, we'll generate prim for it
     'description', // we consider a question not answerable if we don't have specific property for it
-    'priceRange',
-    'brand',
+
+    'telephone',
+    'email',
+    'faxNumber',
+    'hasMap',
 
     // ID properties or opaque strings
     'gtin13',
@@ -441,15 +508,16 @@ const STRUCT_INCLUDE_THING_PROPERTIES = new Set([
 
 
 const STRING_FILE_OVERRIDES = {
-    'org.schema.Restaurant:Restaurant_name': 'com.yelp:restaurant_names',
+    'org.schema.Restaurant:Restaurant_name': 'org.openstreetmap:restaurant',
     'org.schema.Person:Person_name': 'tt:person_full_name',
     'org.schema.Person:Person_alumniOf': 'tt:university_names',
     'org.schema.Person:Person_worksFor': 'tt:company_name',
-    'org.schema.Hotel:Hotel_name': 'tt:hotel_name',
+    'org.schema.Hotel:Hotel_name': 'org.openstreetmap:hotel',
     'org.schema.Music:MusicRecording_byArtist': 'tt:song_artist',
     'org.schema.Music:MusicAlbum_byArtist': 'tt:song_artist',
     'org.schema.Music:MusicRecording_inAlbum': 'tt:song_album',
     'org.schema.Music:MusicRecording_name': 'tt:song_name',
+    'org.schema.Music:CreativeWork_genre': 'com.spotify:genre',
 };
 
 // maps old name to new name
@@ -479,17 +547,27 @@ const ENUM_VALUE_NORMALIZE = {
     }
 };
 
+const WHITELISTED_PROPERTIES_BY_DOMAIN = {
+    'restaurants': ['acceptsReservations', 'starRating', 'starRating.ratingValue', 'openingHours', 'email', 'smokingAllowed', 'priceRange'],
+    'hotels': ['petsAllowed', 'starRating', 'starRating.ratingValue', 'priceRange', 'email', 'faxNumber'],
+    'linkedin': ['jobTitle', 'email', 'telephone', 'faxNumber', 'knowsLanguage', 'workLocation'],
+    'books': ['abridged', 'datePublished'],
+    'music': ['genre', 'datePublished', 'inLanguage', 'duration', 'numTracks']
+};
+
 
 module.exports = {
     BUILTIN_TYPEMAP,
 
     BLACKLISTED_TYPES,
     BLACKLISTED_PROPERTIES,
+    WHITELISTED_PROPERTIES_BY_DOMAIN,
 
     STRUCTURED_HIERARCHIES,
     NON_STRUCT_TYPES,
     PROPERTY_CANONICAL_OVERRIDE,
     MANUAL_PROPERTY_CANONICAL_OVERRIDE,
+    MANUAL_PROPERTY_CANONICAL_OVERRIDE_BY_DOMAIN,
     MANUAL_TABLE_CANONICAL_OVERRIDE,
 
     PROPERTY_FORCE_NOT_ARRAY,
